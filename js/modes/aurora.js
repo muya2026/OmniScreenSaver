@@ -1,122 +1,334 @@
-import { setup2D, drawName, random, TAU } from "./common.js";
+import { setup2D, clamp, smoothstep, drawStyledName, drawVignette, makeStarField, drawTwinklingStars } from "./common.js";
+import { typeStyle } from "./type-styles.js";
+import { fbm3 } from "../motion.js";
+import { splitGraphemes } from "../text.js";
+
+/**
+ * Aurora.
+ *
+ * A WebGL sky where the curtains are fractal noise rather than sine waves:
+ * they form, stretch along the magnetic arc and fade, with fine vertical rays
+ * running through them. The name is written by the curtain itself — a soft,
+ * noisy wipe travels across it as the light passes through.
+ */
 
 const VERTEX_SHADER = `
 attribute vec2 a_position;
 varying vec2 v_uv;
-void main(){ v_uv = a_position * 0.5 + 0.5; gl_Position = vec4(a_position, 0.0, 1.0); }
+void main() {
+  v_uv = a_position * 0.5 + 0.5;
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}
 `;
+
 const FRAGMENT_SHADER = `
 precision mediump float;
 varying vec2 v_uv;
 uniform vec2 u_resolution;
 uniform float u_time;
+uniform float u_reveal;
 uniform sampler2D u_name;
-float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
-void main(){
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p);
+    p *= 2.02;
+    amplitude *= 0.5;
+  }
+  return value;
+}
+
+void main() {
   vec2 uv = v_uv;
-  float t = u_time * 0.12;
-  vec3 color = mix(vec3(0.012,0.025,0.09), vec3(0.035,0.04,0.13), uv.y);
-  float curtainA = sin(uv.x * 7.0 + sin(uv.y * 4.0 + t) * 1.6 + t * 1.4);
-  float curtainB = sin(uv.x * 4.4 - sin(uv.y * 5.0 - t * 0.8) * 1.8 - t);
-  float bandA = pow(max(0.0, 0.5 + 0.5 * curtainA), 8.0) * smoothstep(0.08,0.73,uv.y) * (1.0-smoothstep(0.78,1.0,uv.y));
-  float bandB = pow(max(0.0, 0.5 + 0.5 * curtainB), 6.0) * smoothstep(0.08,0.66,uv.y) * (1.0-smoothstep(0.7,0.96,uv.y));
-  color += vec3(0.09,0.78,0.55) * bandA * (0.7 + 0.3*sin(uv.x*3.0+t));
-  color += vec3(0.26,0.31,0.91) * bandB * 0.56;
-  color += vec3(0.57,0.17,0.52) * pow(max(0.0, 0.5 + 0.5*sin(uv.x*8.0+uv.y*3.0-t)),12.0) * smoothstep(0.15,0.68,uv.y) * 0.35;
-  vec2 cell = floor(uv * u_resolution / 3.0);
-  float star = step(0.997, hash(cell));
-  float twinkle = 0.55 + 0.45 * sin(u_time * 1.4 + hash(cell+4.0)*8.0);
-  color += vec3(0.62,0.75,1.0) * star * twinkle;
+  float t = u_time * 0.08;
+  float aspect = u_resolution.x / max(1.0, u_resolution.y);
+
+  // Night sky
+  vec3 color = mix(vec3(0.012, 0.026, 0.075), vec3(0.03, 0.045, 0.115), uv.y);
+  color += vec3(0.02, 0.03, 0.07) * (1.0 - uv.y);
+
+  // Stars, denser towards the top
+  vec2 cell = floor(uv * u_resolution / 2.5);
+  float star = step(0.9965, hash(cell));
+  float twinkle = 0.55 + 0.45 * sin(u_time * 1.6 + hash(cell + 4.0) * 9.0);
+  color += vec3(0.72, 0.82, 1.0) * star * twinkle * smoothstep(0.25, 0.95, uv.y);
+
+  // Aurora curtains
+  vec3 aurora = vec3(0.0);
+  for (int band = 0; band < 3; band++) {
+    float fb = float(band);
+    float drift = t * (0.6 + fb * 0.25);
+    float arc = uv.x * (1.6 + fb * 0.7) + fb * 3.1;
+    float shape = fbm(vec2(arc, drift + fb * 2.0));
+    float base = 0.42 + shape * 0.42 - fb * 0.08;
+    float thickness = 0.10 + shape * 0.16;
+    float body = exp(-pow((uv.y - base) / thickness, 2.0));
+    // Fine vertical rays
+    float rays = 0.62 + 0.38 * sin(uv.x * 220.0 * aspect * 0.02 + shape * 12.0 + u_time * 0.35);
+    float skirt = smoothstep(0.05, 0.55, uv.y) * (1.0 - smoothstep(0.72, 1.02, uv.y));
+    vec3 tint = band == 0 ? vec3(0.16, 0.92, 0.62)
+              : band == 1 ? vec3(0.22, 0.62, 0.95)
+                          : vec3(0.62, 0.32, 0.92);
+    aurora += tint * body * rays * skirt * (0.42 + 0.3 * sin(u_time * 0.35 + fb));
+  }
+  color += aurora * 0.85;
+
+  // Snow line catching the light
+  float ground = 1.0 - smoothstep(0.13, 0.17, uv.y);
+  vec3 snow = mix(vec3(0.03, 0.06, 0.11), vec3(0.10, 0.20, 0.24), aurora.g * 0.8);
+  color = mix(color, snow, ground);
+  color += aurora * ground * 0.22;
+
+  // The name, revealed by the passing light
   vec4 nameSample = texture2D(u_name, uv);
-  float nameMask = nameSample.a;
-  vec3 nameColor = mix(vec3(0.4,1.0,0.79), vec3(0.75,0.72,1.0), 0.5+0.5*sin(u_time*0.4));
-  color += nameColor * nameMask * (0.72 + 0.24*sin(u_time*0.8));
-  float halo = texture2D(u_name, uv + vec2(0.002,0.0)).a + texture2D(u_name, uv - vec2(0.002,0.0)).a + texture2D(u_name, uv + vec2(0.0,0.005)).a + texture2D(u_name, uv - vec2(0.0,0.005)).a;
-  color += vec3(0.18,0.74,0.6) * max(0.0,halo-0.1) * 0.11;
-  float vignette = 1.0 - smoothstep(0.18,1.15,length((uv-0.5)*vec2(1.0,0.74)));
-  color *= 0.58 + vignette * 0.42;
-  gl_FragColor = vec4(color,1.0);
+  float mask = nameSample.a;
+  float edge = uv.x + fbm(vec2(uv.y * 6.0, u_time * 0.05)) * 0.05;
+  float wipe = smoothstep(u_reveal - 0.14, u_reveal + 0.03, edge);
+  float shown = mask * (1.0 - wipe);
+  float rim = mask * smoothstep(u_reveal - 0.02, u_reveal + 0.1, edge) * wipe;
+  vec3 nameColor = mix(vec3(0.55, 1.0, 0.85), vec3(0.78, 0.72, 1.0), 0.5 + 0.5 * sin(u_time * 0.4 + uv.x * 2.0));
+  color += nameColor * shown * (0.75 + 0.3 * sin(u_time * 0.9));
+  color += vec3(0.65, 1.0, 0.9) * rim * 0.7;
+  // Halo
+  float halo = texture2D(u_name, uv + vec2(0.0025, 0.0)).a + texture2D(u_name, uv - vec2(0.0025, 0.0)).a
+             + texture2D(u_name, uv + vec2(0.0, 0.005)).a + texture2D(u_name, uv - vec2(0.0, 0.005)).a;
+  color += vec3(0.2, 0.78, 0.64) * max(0.0, halo - 0.15) * (1.0 - wipe) * 0.16;
+
+  float vignette = 1.0 - smoothstep(0.2, 1.2, length((uv - 0.5) * vec2(1.0, 0.78)));
+  color *= 0.6 + vignette * 0.4;
+  gl_FragColor = vec4(color, 1.0);
 }
 `;
 
 function makeShader(gl, type, source) {
   const shader = gl.createShader(type);
-  gl.shaderSource(shader, source); gl.compileShader(shader);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
   if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader); gl.deleteShader(shader); throw new Error(log || "Aurora shader could not compile");
+    const log = gl.getShaderInfoLog(shader);
+    gl.deleteShader(shader);
+    throw new Error(log || "Aurora shader could not compile");
   }
   return shader;
 }
 
-function createCanvasFallback(canvas, name, showName) {
-  const surface = setup2D(canvas, "#061029");
-  const { ctx } = surface;
-  let width = 1, height = 1, lights = [];
-  function resize(w, h, ratio) { surface.resize(w, h, ratio); width = w; height = h; lights = Array.from({ length: 12 }, (_, i) => ({ x: i / 11, y: random(.28, .74), phase: random(0, TAU), hue: random(150, 280) })); }
+function createGlFallback(canvas, gl) {
+  function resize(w, h, ratio) {
+    const pixelRatio = Math.min(2, Math.max(1, ratio || 1));
+    canvas.width = Math.round(w * pixelRatio);
+    canvas.height = Math.round(h * pixelRatio);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
   function frame(dt, time) {
-    const gradient = ctx.createLinearGradient(0, 0, 0, height); gradient.addColorStop(0, "#07142e"); gradient.addColorStop(.62, "#0b233d"); gradient.addColorStop(1, "#050813"); ctx.fillStyle = gradient; ctx.fillRect(0, 0, width, height);
-    for (const light of lights) {
-      const x = light.x * width + Math.sin(time * .16 + light.phase) * width * .06;
-      const y = light.y * height + Math.sin(time * .3 + light.phase) * height * .06;
-      const glow = ctx.createRadialGradient(x, y, 1, x, y, width * .19); glow.addColorStop(0, `hsla(${light.hue},95%,66%,.28)`); glow.addColorStop(1, `hsla(${light.hue},95%,48%,0)`); ctx.fillStyle = glow; ctx.fillRect(x - width * .19, y - width * .19, width * .38, width * .38);
-    }
-    if (showName) drawName(ctx, name, width / 2, height * .52, { maxWidth: width * .66, maxHeight: height * .2, size: 138, color: "#c6ffe9", shadow: "#46ebbe", blur: 28, alpha: .8 + .16 * Math.sin(time) });
+    gl.clearColor(
+      0.018 + 0.008 * Math.sin(time * 0.12),
+      0.035 + 0.018 * Math.sin(time * 0.09 + 1),
+      0.095 + 0.024 * Math.sin(time * 0.08 + 2),
+      1
+    );
+    gl.clear(gl.COLOR_BUFFER_BIT);
   }
   return { resize, frame, destroy() {} };
 }
 
-export function createMode({ canvas, name, showName }) {
-  let gl;
-  try { gl = canvas.getContext("webgl", { alpha: false, antialias: false, powerPreference: "low-power", preserveDrawingBuffer: false }); } catch { gl = null; }
-  if (!gl) return createCanvasFallback(canvas, name, showName);
-  let program, position, timeLocation, resolutionLocation, textureLocation, texture, textCanvas, textCtx, width = 1, height = 1;
+function createCanvasFallback(canvas, name, language, showName, preview) {
+  const surface = setup2D(canvas, "#061029");
+  const { ctx } = surface;
+  const style = typeStyle("aurora");
+  let width = 1;
+  let height = 1;
+  let lights = [];
+  let stars = [];
+  function resize(w, h, ratio) {
+    surface.resize(w, h, ratio);
+    width = w;
+    height = h;
+    lights = Array.from({ length: preview ? 5 : 11 }, (_, index) => ({ x: index / 10, y: 0.3 + Math.sin(index * 1.7) * 0.16, phase: index * 1.3, hue: 150 + index * 12 }));
+    stars = makeStarField(preview ? 30 : 110, w, h, { topRatio: 0.7, seed: 2 });
+  }
+  function frame(dt, time) {
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, "#05101f");
+    gradient.addColorStop(0.6, "#0a1c33");
+    gradient.addColorStop(1, "#050a14");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, width, height);
+    drawTwinklingStars(ctx, stars, time, { color: "#dbe6ff", base: 0.24 });
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const light of lights) {
+      const wave = fbm3(light.x * 2.4, time * 0.08, light.phase, { octaves: 3, seed: 5 });
+      const x = (light.x + Math.sin(time * 0.13 + light.phase) * 0.05) * width;
+      const y = (light.y + wave * 0.1) * height;
+      const radius = width * (0.12 + wave * 0.06);
+      const glow = ctx.createRadialGradient(x, y, 1, x, y, radius);
+      glow.addColorStop(0, `hsla(${light.hue},92%,64%,.26)`);
+      glow.addColorStop(0.5, `hsla(${light.hue + 30},90%,58%,.1)`);
+      glow.addColorStop(1, `hsla(${light.hue},90%,50%,0)`);
+      ctx.fillStyle = glow;
+      ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    }
+    ctx.restore();
+    if (showName) {
+      const reveal = clamp(((time % 16) - 3) / 4.5, 0, 1);
+      drawStyledName(ctx, name, width / 2, height * 0.5, {
+        style,
+        size: Math.min(height * 0.2, width * 0.1),
+        maxWidth: width * 0.66,
+        maxHeight: height * 0.22,
+        minSize: 12,
+        language,
+        time,
+        alpha: reveal * 0.92,
+        glow: 1.2,
+        paint: (context, { size }) => {
+          const gradient2 = context.createLinearGradient(-size * 2, 0, size * 3, 0);
+          gradient2.addColorStop(0, "#8dffd8");
+          gradient2.addColorStop(0.5, "#f0fffa");
+          gradient2.addColorStop(1, "#c3a8ff");
+          return gradient2;
+        },
+        perLetter: ({ index, count }) => {
+          const local = clamp((reveal - (index / Math.max(1, count)) * 0.5) / 0.5, 0, 1);
+          return { alpha: local };
+        },
+        progress: reveal
+      });
+    }
+    drawVignette(ctx, width, height, 0.42);
+  }
+  return { resize, frame, destroy() {} };
+}
+
+export function createMode({ canvas, name, language = "en", showName, preview = false }) {
+  let gl = null;
+  try {
+    gl = canvas.getContext("webgl", { alpha: false, antialias: false, depth: false, powerPreference: "low-power" });
+  } catch {
+    gl = null;
+  }
+  if (!gl) return createCanvasFallback(canvas, name, language, showName, preview);
+
+  let program;
+  let timeLocation;
+  let resolutionLocation;
+  let revealLocation;
+  let texture;
+  let textCanvas;
+  let textCtx;
   try {
     const vertex = makeShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
     const fragment = makeShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    program = gl.createProgram(); gl.attachShader(program, vertex); gl.attachShader(program, fragment); gl.linkProgram(program);
+    program = gl.createProgram();
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || "Aurora program could not link");
     gl.useProgram(program);
-    position = gl.getAttribLocation(program, "a_position"); timeLocation = gl.getUniformLocation(program, "u_time"); resolutionLocation = gl.getUniformLocation(program, "u_resolution"); textureLocation = gl.getUniformLocation(program, "u_name");
-    const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-    textCanvas = document.createElement("canvas"); textCanvas.width = 1024; textCanvas.height = 256; textCtx = textCanvas.getContext("2d");
+
+    const position = gl.getAttribLocation(program, "a_position");
+    timeLocation = gl.getUniformLocation(program, "u_time");
+    resolutionLocation = gl.getUniformLocation(program, "u_resolution");
+    revealLocation = gl.getUniformLocation(program, "u_reveal");
+    const textureLocation = gl.getUniformLocation(program, "u_name");
+
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+
+    textCanvas = document.createElement("canvas");
+    textCanvas.width = 1024;
+    textCanvas.height = 256;
+    textCtx = textCanvas.getContext("2d");
+    const style = typeStyle("aurora");
     if (showName) {
-      textCtx.textAlign = "center"; textCtx.textBaseline = "middle"; textCtx.font = `700 142px "Baloo Da 2", "Hind Siliguri", sans-serif`;
-      let fontSize = 142; while (textCtx.measureText(name).width > 940 && fontSize > 60) { fontSize -= 6; textCtx.font = `700 ${fontSize}px "Baloo Da 2", "Hind Siliguri", sans-serif`; }
-      const paint = textCtx.createLinearGradient(0, 55, 0, 205); paint.addColorStop(0, "rgba(220,255,244,.98)"); paint.addColorStop(.5, "rgba(125,255,212,.91)"); paint.addColorStop(1, "rgba(198,172,255,.94)");
-      textCtx.shadowColor = "#55f6c5"; textCtx.shadowBlur = 14; textCtx.fillStyle = paint; textCtx.fillText(name, 512, 128, 940);
+      textCtx.textAlign = "center";
+      textCtx.textBaseline = "middle";
+      let fontSize = 140;
+      textCtx.font = `${style.weight} ${fontSize}px ${style.family}`;
+      let width2 = textCtx.measureText(name).width;
+      while (width2 > 940 && fontSize > 54) {
+        fontSize -= 6;
+        textCtx.font = `${style.weight} ${fontSize}px ${style.family}`;
+        width2 = textCtx.measureText(name).width;
+      }
+      const tracking = (style.tracking || 0) * fontSize;
+      const clusters = splitGraphemes(name, language);
+      const widths = clusters.map(cluster => textCtx.measureText(cluster).width);
+      const total = widths.reduce((sum, value) => sum + value, 0) + tracking * Math.max(0, clusters.length - 1);
+      let cursor = 512 - total / 2;
+      const paint = textCtx.createLinearGradient(0, 60, 0, 200);
+      paint.addColorStop(0, "rgba(226,255,246,.98)");
+      paint.addColorStop(0.5, "rgba(140,255,220,.95)");
+      paint.addColorStop(1, "rgba(198,172,255,.96)");
+      textCtx.shadowColor = "#55f6c5";
+      textCtx.shadowBlur = 16;
+      textCtx.fillStyle = paint;
+      for (let index = 0; index < clusters.length; index++) {
+        textCtx.fillText(clusters[index], cursor + widths[index] / 2, 128);
+        cursor += widths[index] + tracking;
+      }
     }
-    texture = gl.createTexture(); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
+
+    texture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textCanvas);
     gl.uniform1i(textureLocation, 0);
-    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
   } catch {
-    if (program) { try { gl.deleteProgram(program); } catch {} }
-    function resizeFallback(w, h, ratio) {
-      const pixelRatio = Math.min(2, Math.max(1, ratio || 1));
-      canvas.width = Math.round(w * pixelRatio); canvas.height = Math.round(h * pixelRatio);
-      gl.viewport(0, 0, canvas.width, canvas.height);
+    if (program) {
+      try { gl.deleteProgram(program); } catch { /* best effort */ }
     }
-    function frameFallback(dt, time) {
-      gl.clearColor(.018 + .008 * Math.sin(time * .12), .035, .095 + .02 * Math.sin(time * .08), 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-    }
-    return { resize: resizeFallback, frame: frameFallback, destroy() {} };
+    return createGlFallback(canvas, gl);
   }
+
   function resize(w, h, ratio) {
-    width = w; height = h;
     const pixelRatio = Math.min(2, Math.max(1, ratio || 1));
-    canvas.width = Math.round(w * pixelRatio); canvas.height = Math.round(h * pixelRatio);
+    canvas.width = Math.round(w * pixelRatio);
+    canvas.height = Math.round(h * pixelRatio);
     gl.viewport(0, 0, canvas.width, canvas.height);
   }
+
   function frame(dt, time) {
     gl.useProgram(program);
     gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
-    gl.uniform1f(timeLocation, time % 8192);
+    gl.uniform1f(timeLocation, time % 4096);
+    // Hold the name for a while, then let the light take it back.
+    const cycle = time % 22;
+    const reveal = showName
+      ? clamp(Math.min(smoothstep(2.5, 6.5, cycle), 1 - smoothstep(16, 20.5, cycle)), 0, 1) * 1.2
+      : 0;
+    gl.uniform1f(revealLocation, reveal);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
-  return { resize, frame, destroy() { if (texture) gl.deleteTexture(texture); if (program) gl.deleteProgram(program); } };
+
+  return {
+    resize,
+    frame,
+    destroy() {
+      if (texture) gl.deleteTexture(texture);
+      if (program) gl.deleteProgram(program);
+    }
+  };
 }
