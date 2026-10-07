@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#080b18">
+    <meta name="description" content="A fullscreen screensaver experience where your name becomes part of the animation, with 19 ambient worlds in English and Bengali.">
+    <title>OmniScreenSaver — drift into a little wonder</title>
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="preload" href="fonts/hind-siliguri-bengali-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/baloo-da-2-bengali-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+    <script type="module" src="js/main.js"></script>
+  </head>
+  <body>
+    <main id="home" class="home-page">
+      <header class="topbar">
+        <a class="brand" href="#top" aria-label="OmniScreenSaver home">
+          <span class="brand-mark" aria-hidden="true">✳</span>
+          <span>Omni<span class="brand-light">ScreenSaver</span></span>
+        </a>
+        <div class="topbar-actions">
+          <span class="local-badge"><span class="status-dot"></span><span data-i18n="localExperience">A little universe for your screen</span></span>
+          <button id="languageToggle" class="language-toggle" type="button" aria-label="Switch language" data-i18n-aria="languageSwitch">বাংলা</button>
+        </div>
+      </header>
+
+      <div id="top" class="page-wrap">
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="eyebrow-line"></span><span data-i18n="heroEyebrow">A softer place to look</span></p>
+            <h1 id="hero-title"><span data-i18n="heroLineOne">Let your name</span><br><em data-i18n="heroLineTwo">become the</em> <span class="gradient-word" data-i18n="heroLineThree">wonder.</span></h1>
+            <p class="hero-description" data-i18n="heroDescription">Choose a world, settle in, and let the screen wander. A personal, full-screen canvas with gentle motion and ambient sound.</p>
+            <div class="hero-notes">
+              <span>✦ <span data-i18n="heroNoteOne">19 animated worlds</span></span>
+              <span>✦ <span data-i18n="heroNoteTwo">English + বাংলা</span></span>
+              <span>✦ <span data-i18n="heroNoteThree">Sound, softly done</span></span>
+            </div>
+          </div>
+          <div class="hero-art" aria-hidden="true">
+            <div class="hero-orbit orbit-one"></div>
+            <div class="hero-orbit orbit-two"></div>
+            <div class="hero-orbit orbit-three"></div>
+            <div class="hero-sun"></div>
+            <div class="hero-star star-one">✦</div>
+            <div class="hero-star star-two">✧</div>
+            <div class="hero-star star-three">·</div>
+            <div class="hero-art-label">∞ <span data-i18n="heroArtLabel">always in motion</span></div>
+          </div>
+        </section>
+
+        <div class="workspace">
+          <aside class="setup-card" aria-labelledby="setup-title">
+            <div class="section-heading compact-heading">
+              <div>
+                <p class="section-kicker" data-i18n="yourSetup">YOUR SETUP</p>
+                <h2 id="setup-title" data-i18n="makeItYours">Make it yours</h2>
+              </div>
+              <span class="setup-sparkle" aria-hidden="true">✧</span>
+            </div>
+
+            <label class="field-label" for="nameInput" data-i18n="nameLabel">Name in the animation</label>
+            <div class="name-input-wrap">
+              <span class="input-sparkle" aria-hidden="true">✦</span>
+              <input id="nameInput" name="name" type="text" inputmode="text" autocomplete="nickname" maxlength="96" placeholder="Type your name…" data-i18n-placeholder="namePlaceholder" aria-describedby="nameHint">
+              <span id="graphemeCount" class="grapheme-count">0 / 24</span>
+            </div>
+            <p id="nameHint" class="field-hint" data-i18n="nameHint">Your name will be woven into each world.</p>
+
+            <div class="sound-panel">
+              <div class="sound-row">
+                <div class="sound-copy">
+                  <span class="sound-icon" aria-hidden="true">♫</span>
+                  <div><strong data-i18n="ambientSound">Ambient sound</strong><small data-i18n="softByDesign">Soft by design</small></div>
+                </div>
+                <button id="soundToggle" class="switch is-on" type="button" role="switch" aria-checked="true" aria-label="Toggle ambient sound"><span></span></button>
+              </div>
+              <label class="volume-label" for="volumeInput"><span data-i18n="volume">Volume</span><span id="volumeValue">40%</span></label>
+              <input id="volumeInput" class="range-input" type="range" min="0" max="100" step="1" value="40" aria-label="Ambient sound volume">
+            </div>
+
+            <details class="settings-details">
+              <summary><span data-i18n="moreSettings">More settings</span><span class="summary-plus" aria-hidden="true">＋</span></summary>
+              <div class="advanced-settings">
+                <label class="volume-label" for="speedInput"><span data-i18n="animationSpeed">Animation speed</span><span id="speedValue">100%</span></label>
+                <input id="speedInput" class="range-input" type="range" min="50" max="150" step="5" value="100">
+
+                <label class="select-label" for="shuffleSelect" data-i18n="shuffleEvery">Shuffle scenes</label>
+                <select id="shuffleSelect" class="select-input">
+                  <option value="0" data-i18n="shuffleOff">Off</option>
+                  <option value="1" data-i18n="minuteOption1">1 minute</option>
+                  <option value="3" data-i18n="minuteOption3">3 minutes</option>
+                  <option value="5" data-i18n="minuteOption5">5 minutes</option>
+                  <option value="10" data-i18n="minuteOption10">10 minutes</option>
+                </select>
+
+                <label class="check-row"><input id="showNameInput" type="checkbox" checked><span class="checkmark"></span><span data-i18n="showName">Show my name in scenes</span></label>
+                <label class="check-row"><input id="wakeLockInput" type="checkbox" checked><span class="checkmark"></span><span data-i18n="keepAwake">Keep the screen awake (if supported)</span></label>
+
+                <label class="select-label" for="autoStartSelect" data-i18n="autoStart">Start after idle</label>
+                <select id="autoStartSelect" class="select-input">
+                  <option value="0" data-i18n="autoStartOff">Off</option>
+                  <option value="1">1 <span>min</span></option>
+                  <option value="5">5 <span>min</span></option>
+                  <option value="10">10 <span>min</span></option>
+                </select>
+                <p class="field-hint settings-hint" data-i18n="autoStartHint">Auto-start fills the screen; browsers require a tap to enter fullscreen or start sound.</p>
+              </div>
+            </details>
+
+            <div class="setup-actions">
+              <button id="startButton" class="play-button" type="button">
+                <span class="play-button-icon" aria-hidden="true">▶</span>
+                <span data-i18n="startScreensaver">Start screensaver</span>
+                <span class="button-arrow" aria-hidden="true">↗</span>
+              </button>
+              <button id="shareButton" class="share-button" type="button" aria-label="Share this setup" data-i18n-aria="share"><span aria-hidden="true">↗</span><span data-i18n="share">Share this setup</span></button>
+            </div>
+            <p class="gesture-note"><span aria-hidden="true">⌁</span><span data-i18n="gestureNote">Click Start to allow fullscreen and sound.</span></p>
+          </aside>
+
+          <section class="gallery-section" aria-labelledby="gallery-title">
+            <div class="gallery-heading section-heading">
+              <div>
+                <p class="section-kicker" data-i18n="chooseAWorld">CHOOSE A WORLD</p>
+                <h2 id="gallery-title" data-i18n="worldsTitle">Find your kind of quiet</h2>
+                <p class="gallery-subtitle" data-i18n="galleryHint">Pick a scene. Your name becomes part of it.</p>
+              </div>
+              <span id="modeCount" class="mode-count">19 WORLDS</span>
+            </div>
+            <div id="modeGrid" class="mode-grid" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <footer class="footer">
+          <a class="footer-brand" href="#top"><span aria-hidden="true">✳</span> OmniScreenSaver</a>
+          <span data-i18n="footerTagline">A little motion. A softer sound. A space that feels like yours.</span>
+          <span class="footer-credit">© <span id="yearText"></span> <a href="https://github.com/muya2026" target="_blank" rel="noreferrer">@muya2026</a></span>
+        </footer>
+      </div>
+    </main>
+
+    <section id="screensaver" class="screensaver" aria-label="OmniScreenSaver animation" data-i18n-aria="screensaverLabel" aria-hidden="true" inert tabindex="-1">
+      <div id="canvasHost" class="canvas-host"></div>
+      <div class="screen-vignette" aria-hidden="true"></div>
+      <div id="screenControls" class="screen-controls" role="group" aria-label="Screensaver controls" data-i18n-aria="screenControlsLabel">
+        <div class="screen-audio-controls">
+          <button id="screenSoundToggle" class="screen-sound-toggle" type="button" aria-label="Toggle ambient sound" title="Toggle ambient sound"><span aria-hidden="true">♫</span></button>
+          <input id="screenVolumeInput" class="screen-volume" type="range" min="0" max="100" step="1" value="40" aria-label="Ambient sound volume">
+        </div>
+        <button id="closeButton" class="close-button" type="button"><span aria-hidden="true">×</span><span data-i18n="close">Close</span></button>
+      </div>
+      <div id="screenHint" class="screen-hint" aria-hidden="true"><span data-i18n="pressAnyKey">Press any key or touch to exit</span></div>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </section>
+  </body>
+</html>

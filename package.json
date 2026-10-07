@@ -1,0 +1,11 @@
+{
+  "name": "omniscreensaver",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A bilingual fullscreen screensaver-style web experience with 19 ambient animation modes.",
+  "scripts": {
+    "check": "node scripts/check-modes.mjs && node --test tests/*.test.mjs"
+  },
+  "license": "GPL-3.0-only"
+}
