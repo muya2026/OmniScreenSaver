@@ -3,6 +3,7 @@ import { applyTranslations, normalizeLanguage, translate } from "./i18n.js";
 import { MODES, MODES_BY_ID, DEFAULT_MODE_ID } from "./modes/index.js";
 import { limitGraphemes, formatDigits, splitGraphemes } from "./text.js";
 import { createNameShape } from "./name-shape.js";
+import { typeStyle, loadTypeStyle } from "./modes/type-styles.js";
 import { AnimationEngine } from "./engine.js";
 import { AudioEngine } from "./audio/audio-engine.js";
 import { enterFullscreen, exitFullscreen, requestWakeLock, releaseWakeLock } from "./fullscreen.js";
@@ -34,11 +35,21 @@ let idleTimer = 0;
 let toastTimer = 0;
 let shuffleElapsed = 0;
 let wakeLock = null;
-let activePreview = null;
+
+/**
+ * Gallery previews. Every tile runs its own live animation — there are no
+ * still mode thumbnails. Tiles only tick while they are visible or just
+ * offscreen, and they stop completely while the screensaver is running.
+ */
+const previews = new Map();
+let previewObserver = null;
 let previewFrame = 0;
-let previewLastTime = 0;
-let previewElapsed = 0;
+let previewInterval = 1 / 30;
+let resizeTimer = 0;
+let shapeTimer = 0;
 let shapeRequestId = 0;
+let shapeByMode = new Map();
+const SHAPE_MODE_IDS = new Set(["starfield", "mystify", "life", "fireworks", "lava", "flow", "constellation", "campfire"]);
 
 const audio = new AudioEngine(() => {
   if (running) showToast(translate(language, "soundDisabled"));
@@ -72,17 +83,179 @@ function currentDisplayName() {
   return settings.name || translate(language, "defaultName");
 }
 
-async function refreshHomeShape() {
-  const requestId = ++shapeRequestId;
-  const shape = await createNameShape(currentDisplayName(), { language, showName: settings.showName });
-  if (requestId !== shapeRequestId || running) return;
-  currentShape = shape;
-  if (activePreview) {
-    const card = activePreview.card;
-    const mode = MODES_BY_ID.get(card.dataset.mode);
-    if (mode) startPreview(card, mode);
-  }
+function shapeFor(modeId) {
+  if (!SHAPE_MODE_IDS.has(modeId)) return null;
+  return shapeByMode.get(modeId) || currentShape;
 }
+
+/* ------------------------------------------------------------------ *
+ * Name shapes, one per typeface treatment
+ * ------------------------------------------------------------------ */
+
+async function refreshHomeShapes() {
+  const requestId = ++shapeRequestId;
+  const text = currentDisplayName();
+  const modes = [...SHAPE_MODE_IDS].map(id => MODES_BY_ID.get(id)).filter(Boolean);
+  const styles = [...new Map(MODES.map(mode => {
+    const style = typeStyle(mode.id);
+    return [`${style.weight}|${style.family}`, style];
+  })).values()];
+  const [built] = await Promise.all([
+    Promise.all(modes.map(async mode => ({
+      id: mode.id,
+      shape: await createNameShape(text, {
+        language,
+        showName: settings.showName,
+        style: typeStyle(mode.id)
+      })
+    }))),
+    Promise.all(styles.map(style => loadTypeStyle(style, `বাংলা ${text}`)))
+  ]);
+  if (requestId !== shapeRequestId || running) return;
+  shapeByMode = new Map(built.map(item => [item.id, item.shape]));
+  currentShape = shapeFor(currentModeId);
+  rebuildPreviews();
+}
+
+function scheduleShapeRefresh() {
+  if (shapeTimer) clearTimeout(shapeTimer);
+  shapeTimer = setTimeout(() => {
+    shapeTimer = 0;
+    refreshHomeShapes();
+  }, 180);
+}
+
+/* ------------------------------------------------------------------ *
+ * Live gallery previews
+ * ------------------------------------------------------------------ */
+
+function destroyPreview(preview) {
+  try { preview.renderer?.destroy?.(); } catch { /* Preview teardown is best-effort. */ }
+  preview.card.classList.remove("has-live-preview");
+  previews.delete(preview.card);
+}
+
+function stopAllPreviews() {
+  if (previewFrame) cancelAnimationFrame(previewFrame);
+  previewFrame = 0;
+  for (const preview of [...previews.values()]) destroyPreview(preview);
+  previews.clear();
+}
+
+function createPreview(card, mode) {
+  const canvas = card.querySelector(".mode-preview-canvas");
+  if (!canvas) return null;
+  const art = card.querySelector(".mode-art");
+  let renderer;
+  try {
+    renderer = mode.create({
+      canvas,
+      name: currentDisplayName(),
+      shape: shapeFor(mode.id),
+      language,
+      showName: settings.showName,
+      preview: true,
+      emitSound: () => {}
+    });
+  } catch {
+    return null;
+  }
+  const measure = () => {
+    const width = Math.max(80, art?.clientWidth || 240);
+    const height = Math.max(48, art?.clientHeight || 78);
+    renderer.resize?.(width, height, 1);
+  };
+  measure();
+  card.classList.add("has-live-preview");
+  return { card, mode, renderer, measure, last: 0, elapsed: 0, visible: false };
+}
+
+function ensurePreviewFor(card) {
+  if (previews.has(card) || running || document.hidden) return;
+  const mode = MODES_BY_ID.get(card.dataset.mode);
+  if (!mode) return;
+  const preview = createPreview(card, mode);
+  if (preview) previews.set(card, preview);
+}
+
+function observePreviews() {
+  previewObserver?.disconnect();
+  if (typeof IntersectionObserver !== "function") {
+    modeGrid.querySelectorAll(".mode-card").forEach(card => {
+      ensurePreviewFor(card);
+      const preview = previews.get(card);
+      if (preview) preview.visible = true;
+    });
+    startPreviewLoop();
+    return;
+  }
+  previewObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        ensurePreviewFor(entry.target);
+        const preview = previews.get(entry.target);
+        if (preview) {
+          preview.visible = true;
+          preview.last = 0;
+        }
+      } else {
+        const preview = previews.get(entry.target);
+        if (preview) destroyPreview(preview);
+      }
+    }
+    startPreviewLoop();
+  }, { rootMargin: "120px 0px", threshold: 0.01 });
+  modeGrid.querySelectorAll(".mode-card").forEach(card => previewObserver.observe(card));
+  startPreviewLoop();
+}
+
+function startPreviewLoop() {
+  if (previewFrame || running || document.hidden || !previews.size) return;
+  previewFrame = requestAnimationFrame(previewTick);
+}
+
+function previewTick(timestamp) {
+  previewFrame = 0;
+  if (running || document.hidden) return;
+  const now = timestamp / 1000;
+  const started = performance.now();
+  let rendered = 0;
+  for (const preview of [...previews.values()]) {
+    if (!preview.visible) continue;
+    if (preview.last && now - preview.last < previewInterval) continue;
+    const dt = preview.last ? Math.min(0.05, now - preview.last) : 1 / 60;
+    preview.last = now;
+    preview.elapsed += dt * settings.speed;
+    try {
+      preview.renderer.frame(dt * settings.speed, preview.elapsed);
+      rendered++;
+    } catch {
+      destroyPreview(preview);
+    }
+  }
+  if (rendered) {
+    // Back off if the gallery is costing too much, then recover.
+    const cost = performance.now() - started;
+    if (cost > 18) previewInterval = Math.min(1 / 10, previewInterval * 1.6);
+    else if (cost > 9) previewInterval = Math.min(1 / 15, previewInterval * 1.25);
+    else if (cost < 4) previewInterval = Math.max(1 / 30, previewInterval * 0.94);
+  }
+  startPreviewLoop();
+}
+
+function rebuildPreviews() {
+  if (running) return;
+  stopAllPreviews();
+  observePreviews();
+}
+
+function measurePreviews() {
+  for (const preview of previews.values()) preview.measure?.();
+}
+
+/* ------------------------------------------------------------------ *
+ * Settings and interface
+ * ------------------------------------------------------------------ */
 
 function persist() {
   settings.language = language;
@@ -137,50 +310,14 @@ function setSelectedCard() {
   });
 }
 
-function stopPreview() {
-  if (previewFrame) cancelAnimationFrame(previewFrame);
-  previewFrame = 0;
-  previewLastTime = 0;
-  previewElapsed = 0;
-  if (activePreview) {
-    try { activePreview.renderer?.destroy?.(); } catch { /* Preview teardown is best-effort. */ }
-    activePreview.card.classList.remove("has-live-preview");
-    activePreview = null;
-  }
-}
-
-function startPreview(card, mode) {
-  if (running || document.hidden) return;
-  if (activePreview?.card === card) return;
-  stopPreview();
-  const canvas = card.querySelector(".mode-preview-canvas");
-  if (!canvas) return;
+async function copyShareLink() {
+  const url = makeShareUrl({ mode: selectedModeId, name: settings.name, language });
   try {
-    const renderer = mode.create({
-      canvas,
-      name: currentDisplayName(),
-      shape: currentShape,
-      language,
-      showName: settings.showName,
-      emitSound: () => {}
-    });
-    const art = card.querySelector(".mode-art");
-    const resize = () => renderer.resize?.(art.clientWidth || 240, art.clientHeight || 80, 1);
-    resize();
-    card.classList.add("has-live-preview");
-    activePreview = { card, renderer, resize };
-    const tick = timestamp => {
-      if (!activePreview || activePreview.card !== card || running) return;
-      const now = timestamp / 1000;
-      const dt = previewLastTime ? Math.min(.05, now - previewLastTime) : 1 / 60;
-      previewLastTime = now;
-      previewElapsed += dt * settings.speed;
-      try { renderer.frame(dt * settings.speed, previewElapsed); } catch { stopPreview(); return; }
-      previewFrame = requestAnimationFrame(tick);
-    };
-    previewFrame = requestAnimationFrame(tick);
+    await navigator.clipboard.writeText(url);
+    showToast(translate(language, "linkCopied"));
   } catch {
-    stopPreview();
+    showToast(translate(language, "copyFailed"));
+    window.prompt(translate(language, "share"), url);
   }
 }
 
@@ -215,18 +352,16 @@ function createModeCard(mode) {
     setSelectedCard();
     persist();
   });
-  card.addEventListener("pointerenter", () => startPreview(card, mode));
-  card.addEventListener("pointerleave", () => { if (activePreview?.card === card) stopPreview(); });
-  card.addEventListener("focus", () => startPreview(card, mode));
-  card.addEventListener("blur", () => { if (activePreview?.card === card) stopPreview(); });
   return card;
 }
 
 function renderGallery() {
-  stopPreview();
+  previewObserver?.disconnect();
+  stopAllPreviews();
   modeGrid.replaceChildren(...MODES.map(createModeCard));
   ui.modeCount.textContent = translate(language, "modeCount", { count: formatDigits(MODES.length, language) });
   setSelectedCard();
+  observePreviews();
 }
 
 function changeLanguage(nextLanguage) {
@@ -237,7 +372,7 @@ function changeLanguage(nextLanguage) {
   syncSettingsControls();
   updateTitle();
   persist();
-  if (!running) refreshHomeShape();
+  if (!running) refreshHomeShapes();
   if (running) {
     // The screensaver's current pixels remain stable; the next selected mode uses the new language.
     screen.setAttribute("lang", language);
@@ -249,17 +384,6 @@ function showToast(message) {
   ui.toast.classList.add("is-visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => ui.toast.classList.remove("is-visible"), 2200);
-}
-
-async function copyShareLink() {
-  const url = makeShareUrl({ mode: selectedModeId, name: settings.name, language });
-  try {
-    await navigator.clipboard.writeText(url);
-    showToast(translate(language, "linkCopied"));
-  } catch {
-    showToast(translate(language, "copyFailed"));
-    window.prompt(translate(language, "share"), url);
-  }
 }
 
 function syncSessionAudio() {
@@ -329,6 +453,7 @@ function startRenderer(modeId) {
   if (engine) engine.destroy();
   currentModeId = modeId;
   selectedModeId = modeId;
+  currentShape = shapeFor(modeId);
   setSelectedCard();
   const nextEngine = new AnimationEngine({
     host: canvasHost,
@@ -360,7 +485,7 @@ function startRenderer(modeId) {
 async function launchScreensaver(modeId = selectedModeId, { userGesture = true } = {}) {
   if (running || closing) return;
   const mode = MODES_BY_ID.has(modeId) ? modeId : DEFAULT_MODE_ID;
-  stopPreview();
+  stopAllPreviews();
   running = true;
   closing = false;
   currentModeId = mode;
@@ -398,9 +523,17 @@ async function launchScreensaver(modeId = selectedModeId, { userGesture = true }
 
   try {
     const requestId = ++shapeRequestId;
-    const shape = await createNameShape(currentName, { language, showName: settings.showName });
+    if (!SHAPE_MODE_IDS.has(mode)) await loadTypeStyle(typeStyle(mode), `বাংলা ${currentName}`);
+    const shape = SHAPE_MODE_IDS.has(mode)
+      ? await createNameShape(currentName, {
+          language,
+          showName: settings.showName,
+          style: typeStyle(mode)
+        })
+      : null;
     if (!running || requestId !== shapeRequestId) return;
     currentShape = shape;
+    if (shape) shapeByMode = new Map(shapeByMode).set(mode, shape);
     startRenderer(mode);
     if (userGesture) {
       await Promise.allSettled([fullscreenPromise, audioPromise]);
@@ -435,7 +568,7 @@ async function closeScreensaver(reason = "close") {
   canvasHost.replaceChildren();
   currentShape = null;
   sessionSoundEnabled = settings.soundEnabled;
-  refreshHomeShape();
+  refreshHomeShapes();
   syncSoundUI();
   persist();
   closing = false;
@@ -463,7 +596,7 @@ function handleNameInput() {
   settings.name = limited;
   updateNameCount();
   persist();
-  refreshHomeShape();
+  scheduleShapeRefresh();
 }
 
 function bindControls() {
@@ -481,7 +614,11 @@ function bindControls() {
     persist();
   });
   ui.shuffleSelect.addEventListener("change", event => { settings.shuffleInterval = Number(event.currentTarget.value) || 0; shuffleElapsed = 0; persist(); });
-  ui.showNameInput.addEventListener("change", event => { settings.showName = event.currentTarget.checked; persist(); refreshHomeShape(); });
+  ui.showNameInput.addEventListener("change", event => {
+    settings.showName = event.currentTarget.checked;
+    persist();
+    scheduleShapeRefresh();
+  });
   ui.wakeLockInput.addEventListener("change", event => {
     settings.keepAwake = event.currentTarget.checked; persist();
     if (settings.keepAwake) acquireWakeLock(); else releaseCurrentWakeLock();
@@ -493,10 +630,22 @@ function bindControls() {
   document.addEventListener("pointerdown", resetIdleTimer, { passive: true });
   document.addEventListener("pointermove", resetIdleTimer, { passive: true });
   document.addEventListener("keydown", resetIdleTimer, { passive: true });
+  window.addEventListener("resize", () => {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { resizeTimer = 0; measurePreviews(); }, 160);
+  }, { passive: true });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && running && settings.keepAwake && !wakeLock) acquireWakeLock();
-    if (document.hidden && idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
-    else if (!running) resetIdleTimer();
+    if (document.hidden) {
+      if (previewFrame) cancelAnimationFrame(previewFrame);
+      previewFrame = 0;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = 0; }
+    } else {
+      for (const preview of previews.values()) preview.last = 0;
+      if (!running) observePreviews();
+      else startPreviewLoop();
+      if (!running) resetIdleTimer();
+    }
   });
 }
 
@@ -504,8 +653,8 @@ function initialize() {
   applyTranslations(language);
   syncSettingsControls();
   renderGallery();
-  refreshHomeShape();
   updateTitle();
+  refreshHomeShapes();
   $("#yearText").textContent = String(new Date().getFullYear());
   bindControls();
   persist();

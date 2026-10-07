@@ -7,7 +7,10 @@ Build OmniScreenSaver as a static, browser-based screensaver-style web page for 
 ## Requirements
 
 - At least 13 visual modes; the current set contains 19, including three campfire scenes.
+- Every gallery tile is a live animation, not a still thumbnail. Only visible/near-visible previews render, and offscreen previews are torn down to protect battery and GPU time.
 - Endless animation loop, responsive canvas rendering, and best-effort fullscreen support.
+- Each mode has its own name typeface, color/effect treatment, and reveal choreography; new fonts are self-hosted with Bengali-capable fallbacks.
+- Use smooth, continuous motion models (springs, noise/curl fields, buoyancy, drag, turbulence, and layered wave motion) rather than repetitive mechanical loops; use particle-based combustion for all fire scenes.
 - Mouse movement reveals the controls without closing the animation. Clicking elsewhere does not close it.
 - The close button, a touch, or any key press exits the screensaver and returns to the start page. Esc is also covered when the browser exits fullscreen directly.
 - Every mode has a gentle, ambient soundscape. A master sound toggle and volume control are available on the start page and in the mouse-revealed screensaver toolbar.
@@ -67,4 +70,4 @@ A Shuffle option rotates through modes at the selected interval.
 
 ## Status
 
-The complete 19-mode static site is implemented on the Arena working branch. JavaScript syntax/mode checks, Bengali grapheme/calendar tests, translation-key checks, HTML validation, and Canvas rendering smoke tests pass. A live static preview is running in the workspace. GitHub Pages remains disabled; the README Play link becomes live after deployment and explicit approval.
+The complete 19-mode static site is implemented on the Arena working branch. All gallery previews are animated and viewport-budgeted; each world has its own type treatment and reveal, and the three fire scenes share a combustion particle model. JavaScript syntax/mode checks, Bengali grapheme/calendar tests, translation-key checks, font-file checks, and Canvas rendering smoke tests pass. A live static preview is available in the workspace. GitHub Pages remains disabled; the README Play link becomes live after deployment and explicit approval.

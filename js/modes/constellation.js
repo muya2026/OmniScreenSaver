@@ -1,56 +1,176 @@
-import { setup2D, random, TAU, clamp, drawName, smoothstep, drawGlowDot } from "./common.js";
+import { setup2D, clamp, random, smoothstep, rgba, drawStyledName, drawVignette, drawGlowDot } from "./common.js";
+import { typeStyle } from "./type-styles.js";
 import { scaledNameTargets } from "../name-shape.js";
+import { fbm3, noise2, easeOutCubic } from "../motion.js";
 
-export function createMode({ canvas, name, shape, showName, emitSound = () => {} }) {
+/**
+ * Particle Constellation.
+ *
+ * Free nodes drift on slow noise currents and link up when they pass close.
+ * On the gathering beat the named nodes are handed a position in the lettering
+ * and travel there with their own reaction times, so the name assembles ragged
+ * at first and then snaps into focus — and the links between them draw the
+ * strokes. Then they are released back into the dark.
+ */
+export function createMode({ canvas, name, shape, language = "en", showName, emitSound = () => {}, preview = false }) {
   const surface = setup2D(canvas, "#070a1d");
   const { ctx } = surface;
-  let width = 1, height = 1, nodes = [], targetPoints = [], lastCue = 0;
+  const style = typeStyle("constellation");
+  let width = 1;
+  let height = 1;
+  let nodes = [];
+  let lastCue = 0;
+
   function resize(w, h, ratio) {
-    surface.resize(w, h, ratio); width = w; height = h;
-    targetPoints = showName ? scaledNameTargets(shape, w, h, 120, .54, .2) : [];
-    const count = Math.max(90, Math.min(230, targetPoints.length + 70));
+    surface.resize(w, h, ratio);
+    width = w;
+    height = h;
+    const targetPoints = showName
+      ? scaledNameTargets(shape, w, h, preview ? 60 : 150, 0.56, preview ? 0.32 : 0.22)
+      : [];
+    const extra = Math.round(preview ? 26 : 74);
+    const count = targetPoints.length + extra;
     nodes = Array.from({ length: count }, (_, index) => {
       const target = targetPoints[index % Math.max(1, targetPoints.length)];
+      const homeX = random(0, w);
+      const homeY = random(0, h);
       return {
-        x: target && index < targetPoints.length ? target.x + random(-30, 30) : random(0, w),
-        y: target && index < targetPoints.length ? target.y + random(-25, 25) : random(0, h),
-        tx: target ? target.x : random(0, w), ty: target ? target.y : random(0, h),
-        orbitX: random(0, w), orbitY: random(0, h), phase: random(0, TAU), r: random(1, 2.5), named: index < targetPoints.length
+        x: homeX,
+        y: homeY,
+        vx: random(-6, 6),
+        vy: random(-6, 6),
+        homeX,
+        homeY,
+        named: index < targetPoints.length,
+        tx: target?.x ?? homeX,
+        ty: target?.y ?? homeY,
+        delay: random(0, 0.6),
+        r: random(0.9, 2.4),
+        phase: random(0, Math.PI * 2),
+        seed: random(0, 50)
       };
     });
   }
+
   function frame(dt, time) {
-    ctx.fillStyle = "rgba(4,7,19,.27)"; ctx.fillRect(0, 0, width, height);
-    const cycle = time % 17;
-    const gather = showName ? smoothstep(3.5, 6.4, cycle) * (1 - smoothstep(11.5, 15, cycle)) : 0;
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      const driftX = Math.sin(time * .14 + node.phase) * 24;
-      const driftY = Math.cos(time * .17 + node.phase * 1.3) * 19;
-      const targetX = node.named && gather > .03 ? node.tx : node.orbitX + driftX;
-      const targetY = node.named && gather > .03 ? node.ty : node.orbitY + driftY;
-      node.x += (targetX - node.x) * Math.min(1, dt * (node.named ? 2.4 + gather * 2 : .35));
-      node.y += (targetY - node.y) * Math.min(1, dt * (node.named ? 2.4 + gather * 2 : .35));
-      if (!node.named && (node.x < -20 || node.x > width + 20 || node.y < -20 || node.y > height + 20)) { node.orbitX = random(0, width); node.orbitY = random(0, height); }
-    }
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      let connected = 0;
-      for (let j = i + 1; j < nodes.length && connected < 5; j++) {
-        const b = nodes[j]; const dx = a.x - b.x, dy = a.y - b.y; const distance = Math.hypot(dx, dy);
-        const radius = (a.named && b.named && gather > .12) ? 83 : 78;
-        if (distance < radius) {
-          const nameLine = a.named && b.named && gather > .12;
-          ctx.strokeStyle = nameLine ? `rgba(150,225,255,${(.46 * gather) * (1 - distance / radius)})` : `rgba(156,172,255,${.15 * (1 - distance / radius)})`;
-          ctx.lineWidth = nameLine ? 1.3 : .7; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); connected++;
-        }
+    const cycle = time % 18;
+    const gather = showName ? smoothstep(3.4, 7.2, cycle) * (1 - smoothstep(12.4, 16, cycle)) : 0;
+    const release = showName ? smoothstep(16, 17.6, cycle) : 0;
+
+    ctx.fillStyle = "rgba(4,7,19,.24)";
+    ctx.fillRect(0, 0, width, height);
+
+    const linkRadius = Math.min(width, height) * (preview ? 0.22 : 0.12);
+
+    for (const node of nodes) {
+      if (node.named && gather > 0.001 && release < 0.5) {
+        const local = easeOutCubic(clamp((gather - node.delay * 0.55) / (1 - node.delay * 0.55), 0, 1));
+        const wobble = fbm3(node.seed, time * 0.4, node.phase, { octaves: 2, seed: 5 }) * 2.4;
+        const targetX = node.tx + wobble;
+        const targetY = node.ty + wobble * 0.8;
+        // Travel with weight, not by teleporting along an easing curve.
+        node.vx += (targetX - node.x) * (5.5 + local * 8) * dt;
+        node.vy += (targetY - node.y) * (5.5 + local * 8) * dt;
+        node.vx *= Math.exp(-3.4 * dt);
+        node.vy *= Math.exp(-3.4 * dt);
+      } else if (release > 0) {
+        const angle = Math.atan2(node.y - height / 2, node.x - width / 2);
+        node.vx += Math.cos(angle) * release * 120 * dt;
+        node.vy += Math.sin(angle) * release * 120 * dt;
+      } else {
+        const driftX = fbm3(node.x * 0.0012, node.y * 0.0012, time * 0.06, { octaves: 2, seed: 9 }) * 26;
+        const driftY = fbm3(node.y * 0.0012 + 4, node.x * 0.0012, time * 0.05, { octaves: 2, seed: 13 }) * 26;
+        node.vx += (driftX - node.vx) * dt * 0.9;
+        node.vy += (driftY - node.vy) * dt * 0.9;
       }
-      const alpha = a.named && gather > .05 ? .4 + gather * .6 : .55;
-      drawGlowDot(ctx, a.x, a.y, a.named && gather > .1 ? 1.8 : a.r, a.named ? "#c9f2ff" : "#b8a8ff", a.named ? 12 : 8, alpha);
+      node.x += node.vx * dt;
+      node.y += node.vy * dt;
+
+      if (!node.named && (node.x < -30 || node.x > width + 30 || node.y < -30 || node.y > height + 30)) {
+        node.x = random(0, width);
+        node.y = random(0, height);
+        node.vx = random(-6, 6);
+        node.vy = random(-6, 6);
+      }
     }
-    if (showName && gather > .2) drawName(ctx, name, width / 2, height / 2, { maxWidth: width * .52, maxHeight: height * .16, size: 100, color: "rgba(197,231,255,.2)", shadow: "#91bfff", blur: 20, alpha: gather * .8 });
-    const cycleNo = Math.floor(time / 17);
-    if (cycleNo !== lastCue && cycle < .2) { lastCue = cycleNo; emitSound("twinkle"); }
+
+    // Links
+    ctx.save();
+    ctx.lineCap = "round";
+    const stride = preview ? 2 : 1;
+    for (let i = 0; i < nodes.length; i += stride) {
+      const a = nodes[i];
+      let links = 0;
+      for (let j = i + 1; j < nodes.length && links < 4; j++) {
+        const b = nodes[j];
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance > linkRadius) continue;
+        const strength = 1 - distance / linkRadius;
+        const bothNamed = a.named && b.named && gather > 0.1;
+        ctx.strokeStyle = bothNamed
+          ? `rgba(168,222,255,${(0.28 + gather * 0.5) * strength})`
+          : `rgba(150,168,255,${0.1 * strength})`;
+        ctx.lineWidth = bothNamed ? 1.25 : 0.7;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        links++;
+      }
+    }
+    ctx.restore();
+
+    // Nodes
+    for (const node of nodes) {
+      const twinkle = 0.6 + noise2(node.seed, time * 1.2) * 0.45;
+      const named = node.named && gather > 0.05;
+      drawGlowDot(
+        ctx,
+        node.x,
+        node.y,
+        named ? node.r * 1.5 : node.r,
+        named ? "#dff2ff" : "#bdaeff",
+        named ? 13 : 7,
+        named ? clamp(0.35 + gather * 0.65 * twinkle, 0, 1) : clamp(0.35 + twinkle * 0.3, 0, 1)
+      );
+    }
+
+    if (showName && gather > 0.22) {
+      drawStyledName(ctx, name, width / 2, height / 2, {
+        style,
+        size: Math.min(height * 0.16, width * 0.085),
+        maxWidth: width * 0.6,
+        maxHeight: height * 0.2,
+        minSize: 11,
+        language,
+        time,
+        alpha: smoothstep(0.35, 0.95, gather) * 0.5,
+        glow: 0.9,
+        paint: (context, { size }) => {
+          const gradient = context.createLinearGradient(-size * 2, -size, size * 2, size);
+          gradient.addColorStop(0, rgba("#cde8ff", 0.8));
+          gradient.addColorStop(1, rgba("#a9c4ff", 0.55));
+          return gradient;
+        },
+        perLetter: ({ index, count, progress, time: now }) => {
+          const delay = (index / Math.max(1, count)) * 0.5;
+          const local = clamp((progress - delay) / 0.5, 0, 1);
+          return { alpha: local * (0.8 + noise2(index * 3.3, now * 1.1) * 0.25) };
+        },
+        progress: gather
+      });
+    }
+
+    drawVignette(ctx, width, height, 0.4);
+
+    const cycleNo = Math.floor(time / 18);
+    if (cycleNo !== lastCue && cycle < 0.25) {
+      lastCue = cycleNo;
+      emitSound("twinkle");
+    }
   }
+
   return { resize, frame, destroy() {} };
 }

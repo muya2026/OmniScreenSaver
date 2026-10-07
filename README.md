@@ -37,7 +37,10 @@ The interface is available in **English and বাংলা (Bengali)**, with a 
 
 - **Your name belongs in the scene.** It can gather from stardust, glow in falling rain, ripple across sand, or rise from campfire embers.
 - **Ambient sound in every mode.** Each scene has a gentle soundscape, with a master **sound on/off** switch and **volume control**. The audio is soft and atmospheric.
-- **Made to loop.** Animations are designed to continue until you choose to leave.
+- **No still mode cards.** All 19 gallery tiles are live animated previews; only tiles in or near the viewport render, so the rest of the page stays light on battery and mobile GPUs.
+- **Made to loop.** The worlds use naturalistic drift, flow fields, springs, buoyancy, drag, turbulence, and layered water motion rather than repetitive, mechanical oscillation.
+- **Fire that behaves like fire.** The bonfires use hot-gas buoyancy, turbulent flame, cooling embers, drifting smoke, and firelight that flickers across logs and the surrounding scene.
+- **A type style for every world.** Each animation has its own face and name choreography: ember-lit serif, pixel lettering, terminal mono, chrome tech, star-chart lettering, and more. Fonts are self-hosted, with Bengali-capable fallbacks.
 - **Simple exit behavior.** Mouse movement reveals the close control without stopping the animation; a close-button click, touch, or key press exits the screensaver.
 - **English + বাংলা.** The interface supports both languages, including Bengali names and text.
 
